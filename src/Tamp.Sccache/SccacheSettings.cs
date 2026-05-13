@@ -44,7 +44,7 @@ public abstract class SccacheSettingsBase
 /// <c>Local</c>, <c>S3</c>, <c>AzureBlob</c>, <c>Gcs</c>, <c>Redis</c>, <c>Memcached</c>,
 /// or <c>GitHubActionsCache</c>. Validation runs at <see cref="ApplyTo"/> time.
 /// </summary>
-public sealed class SccacheStorageConfig
+public sealed class SccacheStorageSettings
 {
     // Local
     public string? LocalDir { get; set; }
@@ -83,18 +83,18 @@ public sealed class SccacheStorageConfig
     public bool? GitHubActionsCacheEnabled { get; set; }
     public string? GitHubActionsCacheVersion { get; set; }
 
-    public SccacheStorageConfig SetLocal(string dir, string? cacheSize = null) { LocalDir = dir; LocalCacheSize = cacheSize; return this; }
-    public SccacheStorageConfig SetS3(string bucket, string region, string? keyPrefix = null) { S3Bucket = bucket; S3Region = region; S3KeyPrefix = keyPrefix; return this; }
-    public SccacheStorageConfig SetS3Endpoint(string endpoint, bool usePathStyle = true) { S3Endpoint = endpoint; S3UsePathStyle = usePathStyle; return this; }
-    public SccacheStorageConfig SetS3NoCredentials(bool v = true) { S3NoCredentials = v; return this; }
-    public SccacheStorageConfig SetAzureBlob(string container, Secret connectionString, string? keyPrefix = null)
+    public SccacheStorageSettings SetLocal(string dir, string? cacheSize = null) { LocalDir = dir; LocalCacheSize = cacheSize; return this; }
+    public SccacheStorageSettings SetS3(string bucket, string region, string? keyPrefix = null) { S3Bucket = bucket; S3Region = region; S3KeyPrefix = keyPrefix; return this; }
+    public SccacheStorageSettings SetS3Endpoint(string endpoint, bool usePathStyle = true) { S3Endpoint = endpoint; S3UsePathStyle = usePathStyle; return this; }
+    public SccacheStorageSettings SetS3NoCredentials(bool v = true) { S3NoCredentials = v; return this; }
+    public SccacheStorageSettings SetAzureBlob(string container, Secret connectionString, string? keyPrefix = null)
         { AzureBlobContainer = container; AzureConnectionString = connectionString; AzureBlobKeyPrefix = keyPrefix; return this; }
-    public SccacheStorageConfig SetGcs(string bucket, string? keyPath = null, string? rwMode = null, string? keyPrefix = null)
+    public SccacheStorageSettings SetGcs(string bucket, string? keyPath = null, string? rwMode = null, string? keyPrefix = null)
         { GcsBucket = bucket; GcsKeyPath = keyPath; GcsRwMode = rwMode; GcsKeyPrefix = keyPrefix; return this; }
-    public SccacheStorageConfig SetRedis(string url, Secret? password = null, int? db = null, int? ttlSeconds = null)
+    public SccacheStorageSettings SetRedis(string url, Secret? password = null, int? db = null, int? ttlSeconds = null)
         { RedisUrl = url; RedisPassword = password; RedisDb = db; RedisTtlSeconds = ttlSeconds; return this; }
-    public SccacheStorageConfig SetMemcached(string endpoint, int? ttlSeconds = null) { MemcachedEndpoint = endpoint; MemcachedTtlSeconds = ttlSeconds; return this; }
-    public SccacheStorageConfig SetGitHubActionsCache(string? version = null) { GitHubActionsCacheEnabled = true; GitHubActionsCacheVersion = version; return this; }
+    public SccacheStorageSettings SetMemcached(string endpoint, int? ttlSeconds = null) { MemcachedEndpoint = endpoint; MemcachedTtlSeconds = ttlSeconds; return this; }
+    public SccacheStorageSettings SetGitHubActionsCache(string? version = null) { GitHubActionsCacheEnabled = true; GitHubActionsCacheVersion = version; return this; }
 
     /// <summary>Count of backends that have any field set. Used to enforce mutual exclusion.</summary>
     internal int BackendCount =>
@@ -156,7 +156,7 @@ public sealed class SccacheStorageConfig
 /// <summary>Settings for <c>sccache --start-server</c> — start the background daemon.</summary>
 public sealed class SccacheStartSettings : SccacheSettingsBase
 {
-    public SccacheStorageConfig Storage { get; } = new();
+    public SccacheStorageSettings Storage { get; } = new();
 
     /// <summary>Compiler-error log level (<c>SCCACHE_LOG</c>): <c>error</c>, <c>warn</c>, <c>info</c>, <c>debug</c>, <c>trace</c>.</summary>
     public string? LogLevel { get; set; }
@@ -167,7 +167,7 @@ public sealed class SccacheStartSettings : SccacheSettingsBase
     /// <summary>Idle timeout before the daemon shuts itself down (<c>SCCACHE_IDLE_TIMEOUT</c>), seconds. <c>0</c> = never.</summary>
     public int? IdleTimeoutSeconds { get; set; }
 
-    public SccacheStartSettings WithStorage(Action<SccacheStorageConfig> configure) { configure(Storage); return this; }
+    public SccacheStartSettings WithStorage(Action<SccacheStorageSettings> configure) { configure(Storage); return this; }
     public SccacheStartSettings SetLogLevel(string level) { LogLevel = level; return this; }
     public SccacheStartSettings SetServerPort(int port) { ServerPort = port; return this; }
     public SccacheStartSettings SetIdleTimeoutSeconds(int seconds) { IdleTimeoutSeconds = seconds; return this; }
