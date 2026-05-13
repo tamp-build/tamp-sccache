@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <RootNamespace>Tamp.Sccache</RootNamespace>
+    <AssemblyName>Tamp.Sccache</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package">
+    <PackageId>Tamp.Sccache</PackageId>
+    <Description>Wrapper for mozilla/sccache — a shared compilation cache that drops in transparently via RUSTC_WRAPPER. Caches rustc outputs across CI runs (and C/C++ compiles too) keyed by source hash + flags + dep hashes. Backends: local disk, S3, Azure Blob, GCS, Redis, memcached, GitHub Actions cache. Turns the cold-CI Rust-compile bottleneck into a warm-cache lookup. Pairs with Tamp.Cargo for the Rust toolchain side.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(TampCorePath)" Condition="'$(TampCoreMode)' == 'project'" />
+    <PackageReference Include="Tamp.Core" Condition="'$(TampCoreMode)' == 'package'" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+  </ItemGroup>
+
+</Project>
