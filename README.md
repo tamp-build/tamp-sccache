@@ -49,7 +49,7 @@ class Build : TampBuild
 {
     public static int Main(string[] args) => Execute<Build>(args);
 
-    [FromPath("cargo")]   readonly Tool Cargo = null!;
+    [FromPath("cargo")] readonly Tool CargoBin = null!;
     [FromPath("sccache")] readonly Tool SccacheTool = null!;
 
     [Secret] readonly Secret AzureConn = null!;
@@ -73,7 +73,7 @@ class Build : TampBuild
         .Executes(() =>
         {
             var env = Sccache.RustcWrapperEnv();    // { "RUSTC_WRAPPER": "sccache" }
-            return Cargo.Build(s =>
+            return Cargo.Build(CargoBin, s =>
             {
                 s.SetWorkingDirectory(ServiceCrate)
                  .SetRelease()
