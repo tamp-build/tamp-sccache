@@ -178,6 +178,12 @@ These are `Reveal()`'d into the env dictionary at exec time, and the `Secret` in
 
 Releases follow the [Tamp dogfood pattern](MAINTAINERS.md).
 
+## Settings authoring style
+
+Examples above use the fluent `Set*`-chain shape. Every wrapper verb also accepts a `new XxxSettings { ... }` object-init form — both produce identical `CommandPlan`s. The fluent shape stays canonical in docs and the `tamp init` template; opt into object-init scaffolding via `tamp init --settings-style=init`.
+
+See [Build Script Authoring → Two authoring styles](https://github.com/tamp-build/tamp/wiki/Build-Script-Authoring#two-authoring-styles-for-wrapper-calls-120) on the wiki for the side-by-side comparison.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
