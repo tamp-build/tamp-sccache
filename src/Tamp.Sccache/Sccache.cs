@@ -81,11 +81,27 @@ public static class Sccache
         };
     }
 
+    // ---- Object-init overloads (TAM-161) ----
+    // Parallel surface to the fluent verbs above. Both styles produce identical
+    // CommandPlans; fluent stays canonical in docs and `tamp init` templates.
+    public static CommandPlan Start(Tool tool, SccacheStartSettings settings) => Plan(tool, settings);
+    public static CommandPlan Stop(Tool tool, SccacheStopSettings settings) => Plan(tool, settings);
+    public static CommandPlan Stats(Tool tool, SccacheStatsSettings settings) => Plan(tool, settings);
+    public static CommandPlan ZeroStats(Tool tool, SccacheZeroStatsSettings settings) => Plan(tool, settings);
+    public static CommandPlan Version(Tool tool, SccacheVersionSettings settings) => Plan(tool, settings);
+
     private static CommandPlan Run<T>(Tool tool, Action<T>? configure) where T : SccacheSettingsBase, new()
     {
         if (tool is null) throw new ArgumentNullException(nameof(tool));
         var s = new T();
         configure?.Invoke(s);
         return s.ToCommandPlan(tool);
+    }
+
+    private static CommandPlan Plan<T>(Tool tool, T settings) where T : SccacheSettingsBase
+    {
+        if (tool is null) throw new ArgumentNullException(nameof(tool));
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        return settings.ToCommandPlan(tool);
     }
 }
