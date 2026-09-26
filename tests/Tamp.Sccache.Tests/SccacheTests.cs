@@ -17,7 +17,7 @@ public sealed class SccacheTests
     public void Start_Local_Backend_Sets_Env_Vars()
     {
         var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
-            .SetLocal("/tmp/sccache", "10G")));
+            .SetLocal("/tmp/sccache", "10G").SetPerWorker(false)));
         Assert.Equal("--start-server", plan.Arguments[0]);
         Assert.Equal("/tmp/sccache", plan.Environment["SCCACHE_DIR"]);
         Assert.Equal("10G", plan.Environment["SCCACHE_CACHE_SIZE"]);
@@ -27,7 +27,7 @@ public sealed class SccacheTests
     public void Start_S3_Backend_Sets_Bucket_Region_Prefix()
     {
         var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
-            .SetS3("my-bucket", "us-east-1", "rust/")));
+            .SetS3("my-bucket", "us-east-1", "rust/").SetPerWorker(false)));
         Assert.Equal("my-bucket", plan.Environment["SCCACHE_BUCKET"]);
         Assert.Equal("us-east-1", plan.Environment["SCCACHE_REGION"]);
         Assert.Equal("rust/", plan.Environment["SCCACHE_S3_KEY_PREFIX"]);
@@ -55,7 +55,7 @@ public sealed class SccacheTests
     {
         var conn = new Secret("azure_conn", "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=fake==");
         var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
-            .SetAzureBlob("sccache", conn, "ci-runners/")));
+            .SetAzureBlob("sccache", conn, "ci-runners/").SetPerWorker(false)));
         Assert.Equal("sccache", plan.Environment["SCCACHE_AZURE_BLOB_CONTAINER"]);
         Assert.Equal(
             "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=fake==",
@@ -68,7 +68,7 @@ public sealed class SccacheTests
     public void Start_Gcs_Backend()
     {
         var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
-            .SetGcs("my-bucket", "/path/to/sa.json", "READ_WRITE", "rust/")));
+            .SetGcs("my-bucket", "/path/to/sa.json", "READ_WRITE", "rust/").SetPerWorker(false)));
         Assert.Equal("my-bucket", plan.Environment["SCCACHE_GCS_BUCKET"]);
         Assert.Equal("/path/to/sa.json", plan.Environment["SCCACHE_GCS_KEY_PATH"]);
         Assert.Equal("READ_WRITE", plan.Environment["SCCACHE_GCS_RW_MODE"]);
@@ -101,7 +101,7 @@ public sealed class SccacheTests
     public void Start_GitHub_Actions_Cache_Backend()
     {
         var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
-            .SetGitHubActionsCache("v2")));
+            .SetGitHubActionsCache("v2").SetPerWorker(false)));
         Assert.Equal("true", plan.Environment["SCCACHE_GHA_ENABLED"]);
         Assert.Equal("v2", plan.Environment["SCCACHE_GHA_VERSION"]);
     }
@@ -256,5 +256,70 @@ public sealed class SccacheTests
             .SetEnvironmentVariable("AWS_ACCESS_KEY_ID", "AKIA…")
             .WithStorage(b => b.SetS3("b", "r")));
         Assert.Equal("AKIA…", plan.Environment["AWS_ACCESS_KEY_ID"]);
+    }
+
+    // ─── #18 per-worker parallel-safety (correct-by-default) ──────────────
+
+    [Fact]
+    public void Local_Cache_Is_Namespaced_Per_Worker_By_Default()
+    {
+        var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
+            .SetLocal("/tmp/sccache").SetWorkerScope("agent-3")));
+        // The configured dir gets a per-worker segment appended.
+        var dir = plan.Environment["SCCACHE_DIR"].Replace('\\', '/');
+        Assert.StartsWith("/tmp/sccache/", dir);
+        Assert.EndsWith("agent-3", dir);
+        Assert.NotEqual("/tmp/sccache", dir);
+    }
+
+    [Fact]
+    public void Different_Worker_Scopes_Get_Different_Local_Dirs()
+    {
+        string Dir(string worker) => Sccache.Start(FakeTool(), s => s.WithStorage(b => b
+            .SetLocal("/tmp/sccache").SetWorkerScope(worker))).Environment["SCCACHE_DIR"];
+        Assert.NotEqual(Dir("agent-1"), Dir("agent-2"));
+    }
+
+    [Fact]
+    public void Shared_Backend_Prefix_Is_Namespaced_And_Preserves_Base_Prefix()
+    {
+        var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
+            .SetS3("bucket", "us-east-1", "rust/").SetWorkerScope("agent-3")));
+        var prefix = plan.Environment["SCCACHE_S3_KEY_PREFIX"];
+        Assert.Equal("rust/agent-3", prefix);   // base prefix preserved, per-worker segment appended
+    }
+
+    [Fact]
+    public void PerWorker_Off_Restores_Raw_Cache_Location_For_Intentional_Sharing()
+    {
+        var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
+            .SetLocal("/tmp/sccache").SetPerWorker(false)));
+        Assert.Equal("/tmp/sccache", plan.Environment["SCCACHE_DIR"]);
+    }
+
+    [Fact]
+    public void PerWorker_Does_Not_Fabricate_A_Prefix_For_Inactive_Backends()
+    {
+        // A local build must not leak an S3/Azure/GCS key prefix.
+        var plan = Sccache.Start(FakeTool(), s => s.WithStorage(b => b
+            .SetLocal("/tmp/sccache").SetWorkerScope("agent-3")));
+        Assert.False(plan.Environment.ContainsKey("SCCACHE_S3_KEY_PREFIX"));
+        Assert.False(plan.Environment.ContainsKey("SCCACHE_AZURE_KEY_PREFIX"));
+        Assert.False(plan.Environment.ContainsKey("SCCACHE_GCS_KEY_PREFIX"));
+    }
+
+    [Fact]
+    public void WorkerScope_Discriminator_Honors_TampWorkerId_And_Is_Stable_Per_Worktree()
+    {
+        // Explicit id wins and is sanitized.
+        Assert.Equal("agent-pool-3", WorkerScope.Discriminator(getEnv: k => k == "TAMP_WORKER_ID" ? "agent:pool/3" : null));
+
+        // No explicit id → stable hash of the worktree path; same path → same token, different path → different.
+        var a = WorkerScope.Discriminator(getEnv: _ => null, worktree: "/repos/wt-a");
+        var a2 = WorkerScope.Discriminator(getEnv: _ => null, worktree: "/repos/wt-a");
+        var b = WorkerScope.Discriminator(getEnv: _ => null, worktree: "/repos/wt-b");
+        Assert.Equal(a, a2);
+        Assert.NotEqual(a, b);
+        Assert.StartsWith("w-", a);
     }
 }

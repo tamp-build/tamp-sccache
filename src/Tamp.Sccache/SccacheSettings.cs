@@ -83,6 +83,28 @@ public sealed class SccacheStorageSettings
     public bool? GitHubActionsCacheEnabled { get; set; }
     public string? GitHubActionsCacheVersion { get; set; }
 
+    // ── Per-worker parallel-safety (#18, ADR 0019 Pillar 4). Correct-by-default:
+    // N agents in N worktrees get non-cross-contaminated caches without opting in.
+    // Namespaces the local dir cache and shared-backend key prefixes by a stable
+    // per-worker discriminator. Opt out (SetPerWorker(false)) for intentional sharing.
+
+    /// <summary>When true (default), namespace the cache by a per-worker discriminator so parallel worktrees don't collide.</summary>
+    public bool PerWorker { get; set; } = true;
+
+    /// <summary>Explicit per-worker discriminator; null auto-resolves via <see cref="WorkerScope"/> (<c>TAMP_WORKER_ID</c> → worktree hash).</summary>
+    public string? WorkerScopeId { get; set; }
+
+    /// <summary>Enable/disable per-worker cache namespacing. Disable for a deliberately shared cache.</summary>
+    public SccacheStorageSettings SetPerWorker(bool on = true) { PerWorker = on; return this; }
+
+    /// <summary>Pin the per-worker discriminator explicitly (implies <see cref="PerWorker"/>).</summary>
+    public SccacheStorageSettings SetWorkerScope(string discriminator)
+    {
+        WorkerScopeId = discriminator;
+        PerWorker = true;
+        return this;
+    }
+
     public SccacheStorageSettings SetLocal(string dir, string? cacheSize = null) { LocalDir = dir; LocalCacheSize = cacheSize; return this; }
     public SccacheStorageSettings SetS3(string bucket, string region, string? keyPrefix = null) { S3Bucket = bucket; S3Region = region; S3KeyPrefix = keyPrefix; return this; }
     public SccacheStorageSettings SetS3Endpoint(string endpoint, bool usePathStyle = true) { S3Endpoint = endpoint; S3UsePathStyle = usePathStyle; return this; }
@@ -113,24 +135,34 @@ public sealed class SccacheStorageSettings
             throw new InvalidOperationException(
                 "sccache backends are mutually exclusive — pick exactly one of Local / S3 / AzureBlob / Gcs / Redis / Memcached / GitHubActionsCache.");
 
-        if (LocalDir is not null) env["SCCACHE_DIR"] = LocalDir;
+        // #18: resolve the per-worker discriminator once (null when disabled). It only namespaces
+        // the ACTIVE backend — never fabricates a prefix for a backend that isn't configured.
+        var scope = PerWorker ? (WorkerScopeId ?? WorkerScope.Discriminator()) : null;
+        if (string.IsNullOrWhiteSpace(scope)) scope = null;
+
+        if (LocalDir is not null) env["SCCACHE_DIR"] = scope is null ? LocalDir : PathJoin(LocalDir, scope);
         if (LocalCacheSize is not null) env["SCCACHE_CACHE_SIZE"] = LocalCacheSize;
 
+        var s3Scope = S3Bucket is not null ? scope : null;
         if (S3Bucket is not null) env["SCCACHE_BUCKET"] = S3Bucket;
         if (S3Region is not null) env["SCCACHE_REGION"] = S3Region;
-        if (S3KeyPrefix is not null) env["SCCACHE_S3_KEY_PREFIX"] = S3KeyPrefix;
+        if (S3KeyPrefix is not null || s3Scope is not null) env["SCCACHE_S3_KEY_PREFIX"] = KeyPrefix(S3KeyPrefix, s3Scope);
         if (S3Endpoint is not null) env["SCCACHE_ENDPOINT"] = S3Endpoint;
         if (S3UsePathStyle is bool ups) env["SCCACHE_S3_USE_SSL"] = ups ? "true" : "false";
         if (S3NoCredentials is true) env["SCCACHE_S3_NO_CREDENTIALS"] = "true";
 
+        var azureScope = AzureBlobContainer is not null ? scope : null;
         if (AzureBlobContainer is not null) env["SCCACHE_AZURE_BLOB_CONTAINER"] = AzureBlobContainer;
         if (AzureConnectionString is not null) env["SCCACHE_AZURE_CONNECTION_STRING"] = AzureConnectionString.Reveal();
-        if (AzureBlobKeyPrefix is not null) env["SCCACHE_AZURE_KEY_PREFIX"] = AzureBlobKeyPrefix;
+        if (AzureBlobKeyPrefix is not null || azureScope is not null)
+            env["SCCACHE_AZURE_KEY_PREFIX"] = KeyPrefix(AzureBlobKeyPrefix, azureScope);
 
+        var gcsScope = GcsBucket is not null ? scope : null;
         if (GcsBucket is not null) env["SCCACHE_GCS_BUCKET"] = GcsBucket;
         if (GcsKeyPath is not null) env["SCCACHE_GCS_KEY_PATH"] = GcsKeyPath;
         if (GcsRwMode is not null) env["SCCACHE_GCS_RW_MODE"] = GcsRwMode;
-        if (GcsKeyPrefix is not null) env["SCCACHE_GCS_KEY_PREFIX"] = GcsKeyPrefix;
+        if (GcsKeyPrefix is not null || gcsScope is not null)
+            env["SCCACHE_GCS_KEY_PREFIX"] = KeyPrefix(GcsKeyPrefix, gcsScope);
 
         if (RedisUrl is not null) env["SCCACHE_REDIS"] = RedisUrl;
         if (RedisPassword is not null) env["SCCACHE_REDIS_PASSWORD"] = RedisPassword.Reveal();
@@ -141,7 +173,28 @@ public sealed class SccacheStorageSettings
         if (MemcachedTtlSeconds is int mt) env["SCCACHE_MEMCACHED_EXPIRATION"] = mt.ToString();
 
         if (GitHubActionsCacheEnabled is true) env["SCCACHE_GHA_ENABLED"] = "true";
-        if (GitHubActionsCacheVersion is not null) env["SCCACHE_GHA_VERSION"] = GitHubActionsCacheVersion;
+        // GHA cache has no key-prefix env; SCCACHE_GHA_VERSION namespaces entries, so fold the
+        // discriminator into the version for per-worker isolation.
+        var ghaVersion = scope is not null && GitHubActionsCacheEnabled is true
+            ? (GitHubActionsCacheVersion is null ? scope : $"{GitHubActionsCacheVersion}-{scope}")
+            : GitHubActionsCacheVersion;
+        if (ghaVersion is not null) env["SCCACHE_GHA_VERSION"] = ghaVersion;
+    }
+
+    /// <summary>Append a per-worker segment to a local cache directory (OS-native separator).</summary>
+    private static string PathJoin(string dir, string segment) => System.IO.Path.Combine(dir, segment);
+
+    /// <summary>
+    /// Compose a cache key prefix from an optional base and an optional per-worker scope. With no
+    /// scope the base is returned verbatim (backward-compatible, keeps any trailing slash); with a
+    /// scope the two are '/'-joined.
+    /// </summary>
+    private static string KeyPrefix(string? basePrefix, string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope)) return basePrefix ?? string.Empty;
+        var b = basePrefix?.Trim().Trim('/');
+        var parts = new[] { b, scope }.Where(p => !string.IsNullOrWhiteSpace(p));
+        return string.Join("/", parts);
     }
 
     internal IReadOnlyList<Secret> CollectSecrets()
